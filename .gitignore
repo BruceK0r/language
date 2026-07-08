@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+paper_agent.db
+paper_agent.db-*
+sqlite_probe.db
+sqlite_probe.db-*
+
