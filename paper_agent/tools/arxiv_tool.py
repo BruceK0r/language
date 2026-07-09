@@ -28,8 +28,9 @@ class ArxivTool:
         if not keywords:
             return []
         query_parts = [f'all:"{keyword}"' for keyword in keywords[:4]]
+        date_query = f"submittedDate:[{start_date:%Y%m%d}0000 TO {end_date:%Y%m%d}2359]"
         params = {
-            "search_query": " OR ".join(query_parts),
+            "search_query": f"({' OR '.join(query_parts)}) AND {date_query}",
             "start": 0,
             "max_results": max_results,
             "sortBy": "submittedDate",
@@ -89,4 +90,3 @@ class ArxivTool:
                 )
             )
         return papers
-

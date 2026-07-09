@@ -16,6 +16,7 @@ from paper_agent.tools.dedup import deduplicate_papers
 from paper_agent.tools.pdf_parser import PDFParser
 from paper_agent.tools.ranking import rank_papers
 from paper_agent.tools.semantic_scholar_tool import SemanticScholarTool
+from paper_agent.tools.time_buckets import build_default_time_buckets, select_papers_by_time_buckets
 
 logger = logging.getLogger(__name__)
 
@@ -179,16 +180,35 @@ class PaperRadarWorkflow:
     def _search_papers(self, keywords: list[str], parsed: ParsedRequest, state: AgentState) -> list[Paper]:
         start = date.fromisoformat(parsed.start_date)
         end = date.fromisoformat(parsed.end_date)
-        max_results = max(parsed.top_k * 8, 20)
+        buckets = build_default_time_buckets(end, max_window_days=parsed.time_window_days)
+        total_bucket_limit = sum(bucket.limit for bucket in buckets)
+        max_results = max(total_bucket_limit, parsed.top_k * 8, 20)
         papers: list[Paper] = []
         if self.use_mock_search and isinstance(self.llm, MockLLMProvider):
-            state.errors.append("SearchPapers 使用 Mock 检索数据；配置 DEEPSEEK_API_KEY 后会默认调用真实论文源。")
+            state.errors.append(
+                "SearchPapers uses Mock search data; configure DEEPSEEK_API_KEY for real paper sources."
+            )
             return self.llm.sample_papers(start_date=start, max_results=parsed.top_k)
-        try:
-            papers.extend(self.arxiv_tool.search(keywords, start_date=start, end_date=end, max_results=max_results))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("arXiv search failed: %s", exc)
-            state.errors.append(f"SearchPapers arXiv 失败：{exc}")
+
+        for bucket in buckets:
+            bucket_start, bucket_end = bucket.date_range(end)
+            bucket_start = max(bucket_start, start)
+            bucket_end = min(bucket_end, end)
+            if bucket_start > bucket_end:
+                continue
+            try:
+                papers.extend(
+                    self.arxiv_tool.search(
+                        keywords,
+                        start_date=bucket_start,
+                        end_date=bucket_end,
+                        max_results=bucket.limit * 4,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("arXiv search failed for bucket %s: %s", bucket.name, exc)
+                state.errors.append(f"SearchPapers arXiv bucket {bucket.name} failed: {exc}")
+
         try:
             query = " ".join(keywords[:4])
             papers.extend(
@@ -196,11 +216,18 @@ class PaperRadarWorkflow:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Semantic Scholar search failed: %s", exc)
-            state.errors.append(f"SearchPapers Semantic Scholar 失败：{exc}")
+            state.errors.append(f"SearchPapers Semantic Scholar failed: {exc}")
+
         if not papers and isinstance(self.llm, MockLLMProvider):
             papers = self.llm.sample_papers(start_date=start, max_results=parsed.top_k)
-            state.errors.append("SearchPapers 未取得外部结果，已使用 Mock 论文数据用于演示。")
-        return papers
+            state.errors.append("SearchPapers found no external results; using Mock papers for demo.")
+
+        return select_papers_by_time_buckets(
+            deduplicate_papers(papers),
+            keywords=keywords,
+            buckets=buckets,
+            anchor_date=end,
+        )
 
     def _read_top_papers(self, ranked_papers: list[RankedPaper], state: AgentState) -> dict[str, str]:
         source_texts: dict[str, str] = {}

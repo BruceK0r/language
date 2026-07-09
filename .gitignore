@@ -8,4 +8,6 @@ paper_agent.db
 paper_agent.db-*
 sqlite_probe.db
 sqlite_probe.db-*
-
+streamlit_*.out.log
+streamlit_*.err.log
+tmp/
